@@ -63,6 +63,9 @@ const allCombos: ComboKey[] = (() => {
 
 function emptyRangeMap(): RangeMap { const m: RangeMap = {} as RangeMap; for (const c of allCombos) m[c] = "FOLD"; return m; }
 
+// quick helper: set multiple combos to an action on a map
+function setCombos(m: RangeMap, combos: ComboKey[], a: PaintAction){ combos.forEach(k=>{ if (k in m) m[k]=a; }); }
+
 function orderFor(mode: TableMode): readonly Position[] { return mode === "HU" ? POSITIONS_HU : POSITIONS_3MAX; }
 
 export function makeContextKey(history: HistoryState, actor: Position, mode: TableMode): string {
@@ -224,7 +227,7 @@ function actionToCellClass(a: PaintAction){ switch(a){ case "FOLD": return "bg-w
 function RangeGrid({ map, onPaint, currentAction, disabled = false }:{ map: RangeMap; onPaint: (k: ComboKey, a: PaintAction) => void; currentAction: PaintAction; disabled?: boolean; }){ const [isMouseDown, setIsMouseDown] = useState(false); return (
   <div className="overflow-x-auto rounded-xl border">
     <table className="w-full min-w-[520px] border-collapse text-[10px] sm:text-[12px]">
-      <thead><tr><th className="sticky left-0 top-0 z-20 p-1 sm:p-2 text-left bg-white text-slate-900">\</th>{RANKS.map((r)=>(<th key={r} className="p-1 sm:p-2 text-center sticky top-0 z-10 bg-white text-slate-900">{r}</th>))}</tr></thead>
+      <thead><tr><th className="sticky left-0 top-0 z-20 p-1 sm:p-2 text-left bg-white text-slate-900">\\</th>{RANKS.map((r)=>(<th key={r} className="p-1 sm:p-2 text-center sticky top-0 z-10 bg-white text-slate-900">{r}</th>))}</tr></thead>
       <tbody onMouseLeave={()=>setIsMouseDown(false)}>
         {RANKS.map((r1,i)=> (
           <tr key={r1}>
@@ -261,6 +264,12 @@ export default function SpinRangeTrainer(){
   const [modeRandom, setModeRandom] = useState<boolean>(true);
   const [score, setScore] = useState({ok:0, total:0});
 
+  // COPY UI state
+  const [copyFromDepth, setCopyFromDepth] = useState<number>(25);
+  const [copyToDepth, setCopyToDepth] = useState<number>(24);
+  const [copyOnlyCurrentContext, setCopyOnlyCurrentContext] = useState<boolean>(false);
+  const [copyOverwrite, setCopyOverwrite] = useState<boolean>(true);
+
   // Load/Save
   useEffect(()=>{ try{ const raw = localStorage.getItem(STORAGE_KEY); if (raw){ const data = JSON.parse(raw); if (data?.rangesByMode) setRangesByMode(data.rangesByMode as RangesByMode); if (Array.isArray(data?.depths) && data.depths.length) setDepths(data.depths as number[]); } else { const rawV1 = localStorage.getItem("spinango_state_v1"); if (rawV1){ const dataV1 = JSON.parse(rawV1); if (dataV1?.ranges){ setRangesByMode({ "3MAX": dataV1.ranges as Ranges }); toast.message("Migration des ranges v1 → v2 (3MAX)"); } if (Array.isArray(dataV1?.depths) && dataV1.depths.length) setDepths(dataV1.depths as number[]); } } } catch(err){ console.error('Load state error', err); } }, []);
   useEffect(()=>{ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, rangesByMode, depths })); } catch(err){ console.error('Autosave error', err); } }, [rangesByMode, depths]);
@@ -275,6 +284,41 @@ export default function SpinRangeTrainer(){
 
   function normalizePaintToDecision(a: PaintAction | undefined): DecisionAction { if (!a) return 'FOLD'; return a === 'RAISECALL' ? 'RAISE' : (a as DecisionAction); }
   function getCorrectActionForCurrentHand(): DecisionAction { const correctPaint = activeMap ? activeMap[hand] : 'FOLD'; return normalizePaintToDecision(correctPaint); }
+
+  // ── Copy helpers
+  function cloneRangeMap(m?: RangeMap): RangeMap { return m ? JSON.parse(JSON.stringify(m)) as RangeMap : emptyRangeMap(); }
+  function mergeRangeMaps(target: RangeMap | undefined, source: RangeMap, overwrite: boolean): RangeMap {
+    if (overwrite) return cloneRangeMap(source);
+    const res: RangeMap = target ? { ...target } : emptyRangeMap();
+    for (const k of Object.keys(source)){
+      const tk = (res as any)[k] as PaintAction | undefined;
+      if (!tk || tk === 'FOLD') (res as any)[k] = (source as any)[k];
+    }
+    return res;
+  }
+  function copyRangesBetweenDepths(from: number, to: number, onlyCurrentContext: boolean, overwrite: boolean){
+    if (from === to) { toast.error('Choisis deux profondeurs différentes'); return; }
+    const fromKey: DepthKey = `${from}bb`; const toKey: DepthKey = `${to}bb`;
+    const srcPos = rangesByMode[mode]?.[fromKey]?.[position];
+    if (!srcPos){ toast.error(`Pas de ranges pour ${position} @ ${from}bb`); return; }
+    const ctxNow = contextKey();
+    setRangesByMode(prev => {
+      const next: RangesByMode = { ...(prev||{}) };
+      next[mode] = next[mode] || {};
+      const modeMap = next[mode]!;
+      modeMap[toKey] = modeMap[toKey] || {};
+      const destPosMap = (modeMap[toKey]![position] = modeMap[toKey]![position] || {});
+
+      const contexts = onlyCurrentContext ? [ctxNow] : Object.keys(srcPos);
+      if (contexts.length === 0){ toast.error('Aucun contexte à copier'); return prev; }
+      for (const ctx of contexts){
+        const srcMap = srcPos[ctx]; if (!srcMap) continue;
+        destPosMap[ctx] = mergeRangeMaps(destPosMap[ctx], srcMap, overwrite);
+      }
+      toast.success(`Copié ${position} ${from}bb → ${to}bb ${onlyCurrentContext ? `(contexte courant)` : `(tous contextes)`}${overwrite?` (remplace)`:` (complète)`}`);
+      return next;
+    });
+  }
 
   function runSelfTests(){
     const evalAns = (chosen: DecisionAction, correctPaint: PaintAction) => chosen === (correctPaint === 'RAISECALL' ? 'RAISE' : (correctPaint as DecisionAction));
@@ -292,14 +336,47 @@ export default function SpinRangeTrainer(){
       { name:'3MAX BB invalide SB undefined', pass: isContextValid('BB','3MAX',{BTN:'RAISE'}).valid===false },
       { name:'3MAX BB valide BTN=RAISE & SB=CALL', pass: isContextValid('BB','3MAX',{BTN:'RAISE',SB:'CALL'}).valid===true },
     ];
-    const layoutTests = [
-      (()=>{ const l=getSeatLayout('3MAX','BB'); return { name:'Layout 3MAX hero bottom', pass: !!(l.BB && (l.BB as any).bottom) }; })(),
-      (()=>{ const l=getSeatLayout('HU','SB'); return { name:'Layout HU opp top', pass: !!(l.BB && (l.BB as any).top) }; })(),
+    // merge tests
+    const src = emptyRangeMap(); setCombos(src,['AA','AKs'],'RAISE');
+    const tgt = emptyRangeMap(); setCombos(tgt,['AA'],'FOLD'); setCombos(tgt,['QQ'],'CALL');
+    const merged = mergeRangeMaps(tgt, src, false);
+    const copyTests = [
+      { name: 'merge keeps existing non-FOLD', pass: merged['QQ']==='CALL' },
+      { name: 'merge writes missing/FOLD', pass: merged['AKs']==='RAISE' && merged['AA']==='RAISE' },
+      { name: 'overwrite replaces', pass: mergeRangeMaps(tgt, src, true)['QQ']===src['QQ'] },
     ];
-    const tests = [...rules, ...ctxTests, ...layoutTests];
+    const tests = [...rules, ...ctxTests, ...copyTests];
     const passed = tests.filter(t=>t.pass).length;
     if (passed===tests.length) toast.success(`Tests OK (${passed}/${tests.length})`);
     else { const failed = tests.filter(t=>!t.pass).map(t=>t.name).join('; '); toast.error(`Tests ratés (${passed}/${tests.length}) → ${failed}`); }
+  }
+
+  // One-click install of a tiny GTO demo pack (partial, for example only)
+  function installGTODemo(){
+    const dk: DepthKey = '15bb';
+    // BTN unopened
+    const btnMap = emptyRangeMap();
+    setCombos(btnMap,[ 'AA','KK','QQ','JJ','TT','AKs','AQs','AJs','KQs','AKo','AQo','A5s','KJs','QJs','JTs' ],'RAISE');
+    // SB unopened (3-max) — tighter example
+    const sbMap = emptyRangeMap();
+    setCombos(sbMap,[ 'AA','KK','QQ','JJ','TT','AKs','AQs','AJs','KQs','AKo','AQo','A5s' ],'RAISE');
+    // BB vs BTN open (SB folded → context = "BTN:RAISE")
+    const bbVsBtnRaise = emptyRangeMap();
+    setCombos(bbVsBtnRaise,[ 'AA','KK','QQ','JJ','TT','AKs','AQs','AKo' ],'SHOVE');
+    setCombos(bbVsBtnRaise,[ 'AJs','KQs','AQo','99','88' ],'CALL');
+
+    const demo: RangesByMode = {
+      '3MAX': {
+        [dk]: {
+          BTN: { "": btnMap },
+          SB:  { "": sbMap },
+          BB:  { "BTN:RAISE": bbVsBtnRaise },
+        }
+      }
+    };
+    setRangesByMode(demo);
+    if (!depths.includes(15)) setDepths(prev=> Array.from(new Set([...prev,15])).sort((a,b)=>b-a));
+    toast.success('Pack GTO (démo) installé');
   }
 
   function nextHand(){ const next = randomHandKey(); let newPos: Position = position; let newDepth = activeDepth; if (modeRandom){ const positionsPool = mode === "HU" ? POSITIONS_HU : POSITIONS_3MAX; newPos = positionsPool[Math.floor(Math.random()*positionsPool.length)] as Position; newDepth = depths[Math.floor(Math.random()*depths.length)]; setPosition(newPos); setActiveDepth(newDepth); } if (autoHistory){ const h = generateRandomHistory(newPos, mode); setHistory(h); } setShowRange(false); setHand(next); }
@@ -402,6 +479,28 @@ export default function SpinRangeTrainer(){
               <div className="flex flex-wrap items-center gap-3"><DepthSelector depths={depths} active={activeDepth} setActive={setActiveDepth} />
                 <Select value={position} onValueChange={(v)=>setPosition(v as Position)}><SelectTrigger className="w-32"><SelectValue placeholder="Position"/></SelectTrigger><SelectContent>{posOptions.map(p=> <SelectItem key={p} value={p as any}>{posLabel(p as Position)}</SelectItem>)}</SelectContent></Select>
               </div>
+
+              {/* Copy ranges (position courante) */}
+              <div className="rounded-xl border p-3 space-y-2 bg-white/60">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Label>Copier {posLabel(position)} (mode {mode})</Label>
+                  <Label className="text-xs text-muted-foreground">de</Label>
+                  <Select value={String(copyFromDepth)} onValueChange={(v)=>setCopyFromDepth(parseInt(v,10))}>
+                    <SelectTrigger className="w-20"><SelectValue placeholder="from"/></SelectTrigger>
+                    <SelectContent>{depths.map(d=> <SelectItem key={d} value={String(d)}>{d}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Label className="text-xs text-muted-foreground">à</Label>
+                  <Select value={String(copyToDepth)} onValueChange={(v)=>setCopyToDepth(parseInt(v,10))}>
+                    <SelectTrigger className="w-20"><SelectValue placeholder="to"/></SelectTrigger>
+                    <SelectContent>{depths.map(d=> <SelectItem key={d} value={String(d)}>{d}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <div className="flex items-center gap-2"><Switch checked={copyOnlyCurrentContext} onCheckedChange={setCopyOnlyCurrentContext}/><span className="text-xs">Seulement contexte actuel</span></div>
+                  <div className="flex items-center gap-2"><Switch checked={copyOverwrite} onCheckedChange={setCopyOverwrite}/><span className="text-xs">Remplacer (sinon complète)</span></div>
+                  <Button size="sm" onClick={()=>copyRangesBetweenDepths(copyFromDepth, copyToDepth, copyOnlyCurrentContext, copyOverwrite)}>Appliquer</Button>
+                </div>
+                <div className="text-xs text-muted-foreground">Astuce : pour propager rapidement, répète l'opération (ex : 25→24, puis 24→23 ...). «Remplacer» écrase; sinon, seules les cases FOLD/missing seront complétées.</div>
+              </div>
+
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2 flex-wrap"><Label>Contexte</Label><HistoryPicker actor={position} /></div>
                 {!isCtxValid && (<div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm"><AlertTriangle className="h-4 w-4"/><span>{ctxReason}</span></div>)}
@@ -421,7 +520,7 @@ export default function SpinRangeTrainer(){
             <CardHeader className="pb-2"><CardTitle>Options</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2"><Label>Profondeurs actives (séparées par des virgules)</Label><Input value={depths.join(',')} onChange={(e)=>{ const arr = e.target.value.split(',').map(x=>parseInt(x.trim(),10)).filter(n=>!isNaN(n)); setDepths(arr); if (!arr.includes(activeDepth) && arr.length){ setActiveDepth(arr[0]); } }} placeholder="25,24,23,...,5"/></div>
-              <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={runSelfTests}>Lancer les self-tests</Button><span className="text-xs text-muted-foreground">(règles de contexte, layout, etc.)</span></div>
+              <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={runSelfTests}>Lancer les self-tests</Button> <Button size="sm" variant="secondary" onClick={installGTODemo}>Installer pack GTO (démo)</Button><span className="text-xs text-muted-foreground">(règles de contexte, layout, merge/copy, etc.)</span></div>
               <div className="flex flex-wrap items-center gap-2"><Button size="sm" onClick={handleExport}>Exporter JSON</Button><Button size="sm" variant="secondary" onClick={handleImportClick}>Importer JSON (remplacer)</Button><input ref={fileInputRef} type="file" accept="application/json" hidden onChange={onFileSelected} /><span className="text-xs text-muted-foreground">Autosave activé (localStorage). Export/Import incluent 3MAX & HU.</span></div>
               <div className="text-xs text-muted-foreground">Les ranges dépendent du <b>contexte</b> et du <b>mode</b>. Exemple HU: si SB (BTN) a LIMP (CALL), tu édites la réponse de BB vs limp.</div>
             </CardContent>
