@@ -134,20 +134,27 @@ function splitToCards(k: ComboKey){
   if (t === 's')  return [{ rank: r1, suit: '♠' as const }, { rank: r2, suit: '♠' as const }];
   return [{ rank: r1, suit: '♠' as const }, { rank: r2, suit: '♥' as const }];
 }
-function HoleCards({combo}:{combo: ComboKey}){
+// == HoleCards (remplace la version actuelle) ==
+function HoleCards({ combo }: { combo: ComboKey }) {
   const [c1, c2] = splitToCards(combo);
   return (
     <div className="flex items-center gap-2 sm:gap-3">
-      {[c1,c2].map((c,idx)=> (
-        <div key={idx} className="w-14 h-20 sm:w-16 sm:h-24 rounded-2xl border shadow-sm bg-white flex flex-col items-center justify-center">
-          <div className={`text-2xl sm:text-3xl font-bold ${RED.has(c.suit)?"text-red-600":"text-slate-800"}`}>{c.rank}</div>
-          <div className={`text-lg sm:text-xl ${RED.has(c.suit)?"text-red-600":"text-slate-800"}`}>{c.suit}</div>
+      {[c1, c2].map((c, idx) => (
+        <div
+          key={idx}
+          className="w-12 h-16 sm:w-16 sm:h-24 rounded-2xl border shadow-sm bg-white flex flex-col items-center justify-center"
+        >
+          <div className={`text-xl sm:text-3xl font-bold ${RED.has(c.suit) ? "text-red-600" : "text-slate-800"}`}>
+            {c.rank}
+          </div>
+          <div className={`text-base sm:text-xl ${RED.has(c.suit) ? "text-red-600" : "text-slate-800"}`}>
+            {c.suit}
+          </div>
         </div>
       ))}
     </div>
   );
-}
-function DealerChip(){ return <span className="inline-flex items-center justify-center rounded-full bg-amber-300 text-amber-900 text-[10px] font-bold w-6 h-6 shadow">D</span>; }
+}function DealerChip(){ return <span className="inline-flex items-center justify-center rounded-full bg-amber-300 text-amber-900 text-[10px] font-bold w-6 h-6 shadow">D</span>; }
 function SeatBadge({ p, mode }: { p: Position; mode: TableMode }){
   const isBtn = (mode === 'HU' && p === 'SB') || (mode === '3MAX' && p === 'BTN');
   return (
@@ -212,44 +219,71 @@ function PokerTable({ mode, hero, history, hand, depth }:{
     <div className="w-full">
       <div className="relative mx-auto w-full max-w-full sm:max-w-3xl lg:max-w-4xl aspect-[4/3] sm:aspect-[16/9] lg:aspect-[2/1] rounded-[999px] bg-emerald-900/80 ring-2 sm:ring-4 ring-emerald-700/60 shadow-inner overflow-hidden px-2">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.08),rgba(0,0,0,0))]"></div>
-        {seats.map((p)=>{
-          const style = layout[p] || {};
-          if ((style as any).display === 'none') return null;
-          const isHero = p === hero;
-          const {label, action} = prettyAction(p, mode, history);
-          const step = order.indexOf(p)+1;
-          const actedBeforeHero = order.indexOf(p) < heroIdx;
-          return (
-            <div key={p} className="absolute z-10" style={style}>
-              <div className={`w-[clamp(120px,18vw,200px)] rounded-2xl bg-slate-900/90 text-white border border-white/10 shadow-md p-2 ${isHero ? 'ring-2 ring-fuchsia-400/80' : ''}`}>
-                <div className="flex items-center justify-between gap-2 min-h-6">
-                  <SeatBadge p={p} mode={mode} />
-                  <ActionPill label={label} action={action} step={step} dimmed={!actedBeforeHero && !isHero} />
-                </div>
-                {isHero ? (
-                  <>
-                    <div className="mt-2 flex justify-center"><HoleCards combo={hand} /></div>
-                    <div className="mt-1 text-center text-white select-none">
-                      <span className="text-xl sm:text-2xl font-extrabold leading-none">{depth}</span>
-                      <span className="ml-1 text-base sm:text-lg font-extrabold leading-none">bb</span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="mt-2">
-                    <div className="mt-1 text-center text-white select-none">
-                      <span className="text-xl sm:text-2xl font-extrabold leading-none">{depth}</span>
-                      <span className="ml-1 text-base sm:text-lg font-extrabold leading-none">bb</span>
-                    </div>
-                  </div>
-                )}
-              </div>
+        {seats.map((p) => {
+  const style = layout[p] || {};
+  if ((style as any).display === "none") return null;
+
+  const isHero = p === hero;
+  const { label, action } = prettyAction(p, mode, history);
+  const step = order.indexOf(p) + 1;
+  const actedBeforeHero = order.indexOf(p) < heroIdx;
+
+  // largeur responsive : plus étroit en mobile
+  const seatWidthClass =
+    "w-[clamp(92px,28vw,160px)] sm:w-[clamp(120px,18vw,200px)]";
+
+  return (
+    <div key={p} className="absolute z-10" style={style}>
+      <div
+        className={`${seatWidthClass} rounded-2xl bg-slate-900/90 text-white border border-white/10 shadow-md p-1.5 sm:p-2 ${
+          isHero ? "ring-2 ring-fuchsia-400/80" : "scale-90 sm:scale-100"
+        } origin-center`}
+      >
+        <div className="flex items-center justify-between gap-1.5 sm:gap-2 min-h-5 sm:min-h-6">
+          <SeatBadge p={p} mode={mode} />
+          <ActionPill
+            label={label}
+            action={action}
+            step={step}
+            dimmed={!actedBeforeHero && !isHero}
+          />
+        </div>
+
+        {isHero ? (
+          <>
+            <div className="mt-1.5 sm:mt-2 flex justify-center">
+              <HoleCards combo={hand} />
             </div>
-          );
-        })}
+            <div className="mt-1 text-center text-white select-none">
+              <span className="text-lg sm:text-2xl font-extrabold leading-none">
+                {depth}
+              </span>
+              <span className="ml-1 text-sm sm:text-lg font-extrabold leading-none">
+                bb
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="mt-1.5 sm:mt-2">
+            <div className="mt-1 text-center text-white select-none">
+              <span className="text-lg sm:text-2xl font-extrabold leading-none">
+                {depth}
+              </span>
+              <span className="ml-1 text-sm sm:text-lg font-extrabold leading-none">
+                bb
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
+})}
+</div>
+</div>
+);
 }
+
 
 // ── Account tab ───────────────────────────────────────────────────────────────
 function pct(c?: Counter){ if (!c || c.total===0) return 0; return Math.round((100*c.correct)/c.total); }
